@@ -1,0 +1,17 @@
+# Binaries
+/wti
+/dist/
+*.exe
+*.out
+
+# Test / coverage
+*.test
+coverage.out
+coverage.txt
+
+# Go workspace
+go.work
+go.work.sum
+
+# OS / editor
+.DS_Store
