@@ -166,7 +166,12 @@ func collectSources(mainPath string, m *manifest.Manifest) (paths []string, miss
 		}
 	}
 
-	// Fast path: literal lines resolved by direct stat.
+	// Literal lines are resolved by direct stat, both to surface missing
+	// sources (typos) and, in the common no-pattern case, to copy without
+	// walking the tree. When the manifest also contains wildcard/negation
+	// lines, a literal may be re-excluded by a later "!" pattern, so its
+	// inclusion is decided by the walk below (which applies the full matcher)
+	// rather than added here unconditionally.
 	for _, lit := range m.Literals() {
 		rel := strings.TrimSuffix(lit, "/")
 		if _, err := os.Lstat(filepath.Join(mainPath, filepath.FromSlash(rel))); err != nil {
@@ -176,7 +181,9 @@ func collectSources(mainPath string, m *manifest.Manifest) (paths []string, miss
 			}
 			return nil, nil, err
 		}
-		add(rel)
+		if !m.HasPatterns() {
+			add(rel)
+		}
 	}
 
 	// Slow path: walk the tree for wildcard / negation lines.

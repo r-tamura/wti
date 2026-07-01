@@ -183,6 +183,27 @@ func TestRun_WildcardMatching(t *testing.T) {
 	}
 }
 
+func TestRun_LiteralNegatedByPatternNotCopied(t *testing.T) {
+	f := newFixture(t)
+	// A literal include that a later "!" line re-excludes must NOT be copied,
+	// even though the literal fast-path would otherwise stat+copy it directly.
+	write(t, filepath.Join(f.main, ".worktreeinclude"), "config.local\nkeep.local\n!config.local\n")
+	write(t, filepath.Join(f.main, "config.local"), "excluded")
+	write(t, filepath.Join(f.main, "keep.local"), "kept")
+
+	var out, errb bytes.Buffer
+	code := run(f.main, Config{Target: "feat-a"}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, errb.String())
+	}
+	if exists(filepath.Join(f.featA, "config.local")) {
+		t.Error("config.local was re-excluded by !config.local and must NOT be copied")
+	}
+	if !exists(filepath.Join(f.featA, "keep.local")) {
+		t.Error("keep.local should still be copied")
+	}
+}
+
 func TestRun_WalkSkipsNestedWorktree(t *testing.T) {
 	f := newFixture(t)
 	// Create a worktree nested under the main worktree's tracked dir.
