@@ -5,9 +5,59 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"testing"
 )
+
+func TestResolveVersion(t *testing.T) {
+	bi := &debug.BuildInfo{
+		Main: debug.Module{Version: "v1.2.3"},
+		Settings: []debug.BuildSetting{
+			{Key: "vcs.revision", Value: "0123456789abcdef0123456789abcdef01234567"},
+			{Key: "vcs.time", Value: "2026-07-01T00:00:00Z"},
+			{Key: "vcs.modified", Value: "false"},
+		},
+	}
+
+	t.Run("ldflags win over build info", func(t *testing.T) {
+		v, c, d := resolveVersion("v0.9.0", "abc123", "2026-06-30", bi, true)
+		if v != "v0.9.0" || c != "abc123" || d != "2026-06-30" {
+			t.Errorf("got %q/%q/%q, want ldflags values untouched", v, c, d)
+		}
+	})
+
+	t.Run("go install: fall back to module version", func(t *testing.T) {
+		v, c, _ := resolveVersion("dev", "none", "unknown", bi, true)
+		if v != "v1.2.3" {
+			t.Errorf("version = %q, want v1.2.3 from build info", v)
+		}
+		if c != "0123456789ab" {
+			t.Errorf("commit = %q, want shortened revision", c)
+		}
+	})
+
+	t.Run("go build in repo: derive from revision + dirty", func(t *testing.T) {
+		devel := &debug.BuildInfo{
+			Main: debug.Module{Version: "(devel)"},
+			Settings: []debug.BuildSetting{
+				{Key: "vcs.revision", Value: "0123456789abcdef0123456789abcdef01234567"},
+				{Key: "vcs.modified", Value: "true"},
+			},
+		}
+		v, _, _ := resolveVersion("dev", "none", "unknown", devel, true)
+		if v != "0123456789ab-dirty" {
+			t.Errorf("version = %q, want revision-derived dirty version", v)
+		}
+	})
+
+	t.Run("no build info: keep defaults", func(t *testing.T) {
+		v, _, _ := resolveVersion("dev", "none", "unknown", nil, false)
+		if v != "dev" {
+			t.Errorf("version = %q, want dev", v)
+		}
+	})
+}
 
 type fixture struct {
 	main  string // main worktree path

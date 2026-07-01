@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 
@@ -21,9 +22,62 @@ const manifestName = ".worktreeinclude"
 
 var buildVersion, buildCommit, buildDate = "dev", "none", "unknown"
 
-// SetVersion records build information for the --version flag.
+// SetVersion records build information (typically injected via -ldflags) for
+// the --version flag.
 func SetVersion(version, commit, date string) {
 	buildVersion, buildCommit, buildDate = version, commit, date
+}
+
+// versionString returns the effective version line, falling back to the Go
+// build info embedded by `go install`/`go build` when -ldflags were not used.
+func versionString() string {
+	bi, ok := debug.ReadBuildInfo()
+	v, c, d := resolveVersion(buildVersion, buildCommit, buildDate, bi, ok)
+	return fmt.Sprintf("wti %s (commit %s, built %s)", v, c, d)
+}
+
+// resolveVersion decides the version/commit/date to report. Values injected via
+// -ldflags take precedence; otherwise it derives them from the module version
+// and VCS stamps recorded in the build info.
+func resolveVersion(ldVersion, ldCommit, ldDate string, bi *debug.BuildInfo, ok bool) (version, commit, date string) {
+	version, commit, date = ldVersion, ldCommit, ldDate
+	if version != "dev" || !ok || bi == nil {
+		return version, commit, date
+	}
+
+	// A real (or pseudo) module version already encodes dirtiness; only a
+	// version we derive ourselves from the raw revision needs a -dirty suffix.
+	derived := false
+	if v := bi.Main.Version; v != "" && v != "(devel)" {
+		version = v
+	}
+
+	var rev, modified string
+	for _, s := range bi.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			rev = s.Value
+		case "vcs.time":
+			date = s.Value
+		case "vcs.modified":
+			modified = s.Value
+		}
+	}
+	if rev != "" {
+		short := rev
+		if len(short) > 12 {
+			short = short[:12]
+		}
+		commit = short
+		if version == "dev" {
+			version = short
+			derived = true
+		}
+	}
+	if derived && modified == "true" {
+		version += "-dirty"
+	}
+	return version, commit, date
 }
 
 // Config holds the resolved command-line options.
@@ -66,7 +120,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if showVersion {
-		fmt.Fprintf(stdout, "wti %s (commit %s, built %s)\n", buildVersion, buildCommit, buildDate)
+		fmt.Fprintln(stdout, versionString())
 		return 0
 	}
 	if fs.NArg() > 1 {
