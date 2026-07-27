@@ -82,9 +82,10 @@ func resolveVersion(ldVersion, ldCommit, ldDate string, bi *debug.BuildInfo, ok 
 
 // Config holds the resolved command-line options.
 type Config struct {
-	DryRun bool
-	Debug  bool
-	Target string // positional worktree selector; empty = all linked worktrees
+	DryRun  bool
+	Debug   bool
+	Verbose int    // 0 = summary only, 1 (-v) = per-file, 2 (-vv) = resolution details
+	Target  string // positional worktree selector; empty = all linked worktrees
 }
 
 const usage = `wti — copy files listed in .worktreeinclude into git worktrees
@@ -108,9 +109,11 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		fs.PrintDefaults()
 	}
 	var cfg Config
-	var showVersion bool
+	var showVersion, verbose, veryVerbose bool
 	fs.BoolVar(&cfg.DryRun, "dry-run", false, "show planned actions without writing anything")
 	fs.BoolVar(&cfg.Debug, "debug", false, "print full error details on failure")
+	fs.BoolVar(&verbose, "v", false, "list each copied file")
+	fs.BoolVar(&veryVerbose, "vv", false, "also show manifest and target resolution details")
 	fs.BoolVar(&showVersion, "version", false, "print version information and exit")
 
 	if err := fs.Parse(args); err != nil {
@@ -128,6 +131,11 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	cfg.Target = fs.Arg(0)
+	if veryVerbose {
+		cfg.Verbose = 2
+	} else if verbose {
+		cfg.Verbose = 1
+	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -145,6 +153,9 @@ func run(cwd string, cfg Config, stdout, stderr io.Writer) int {
 	}
 
 	manifestPath := filepath.Join(main.Path, manifestName)
+	if cfg.Verbose >= 2 {
+		fmt.Fprintf(stdout, "manifest: %s\n", manifestPath)
+	}
 	m, err := manifest.ParseFile(manifestPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -174,6 +185,10 @@ func run(cwd string, cfg Config, stdout, stderr io.Writer) int {
 	}
 
 	for _, tgt := range targets {
+		if cfg.Verbose >= 2 {
+			fmt.Fprintf(stdout, "target: %s\n", tgt.Path)
+		}
+		copied := 0
 		for _, rel := range paths {
 			src := filepath.Join(main.Path, rel)
 			dst := filepath.Join(tgt.Path, rel)
@@ -186,7 +201,13 @@ func run(cwd string, cfg Config, stdout, stderr io.Writer) int {
 				exitCode = 1
 				continue
 			}
-			fmt.Fprintf(stdout, "copied %s -> %s\n", rel, tgt.Path)
+			copied++
+			if cfg.Verbose >= 1 {
+				fmt.Fprintf(stdout, "copied %s -> %s\n", rel, tgt.Path)
+			}
+		}
+		if !cfg.DryRun && cfg.Verbose == 0 {
+			fmt.Fprintf(stdout, "copied %d file(s) -> %s\n", copied, tgt.Path)
 		}
 	}
 

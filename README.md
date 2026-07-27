@@ -24,6 +24,12 @@ wti my-feature
 
 # Preview without writing anything
 wti --dry-run
+
+# List each copied file (default output is a per-worktree summary)
+wti -v
+
+# Also show manifest and target resolution details
+wti -vv
 ```
 
 `wti` always reads `.worktreeinclude` from the **main worktree**, regardless of

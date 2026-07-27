@@ -186,6 +186,85 @@ func TestRun_DryRunWritesNothing(t *testing.T) {
 	}
 }
 
+func TestRun_DefaultOutputIsSummaryOnly(t *testing.T) {
+	f := newFixture(t)
+	write(t, filepath.Join(f.main, ".worktreeinclude"), "config.local\nextra.local\n")
+	write(t, filepath.Join(f.main, "config.local"), "secret")
+	write(t, filepath.Join(f.main, "extra.local"), "extra")
+
+	var out, errb bytes.Buffer
+	code := run(f.main, Config{Target: "feat-a"}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, errb.String())
+	}
+	if strings.Contains(out.String(), "config.local") {
+		t.Errorf("default output should not list individual files, got: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "copied 2 file(s)") {
+		t.Errorf("default output should summarize the copy count, got: %q", out.String())
+	}
+}
+
+func TestRun_VerboseListsEachFile(t *testing.T) {
+	f := newFixture(t)
+	write(t, filepath.Join(f.main, ".worktreeinclude"), "config.local\n")
+	write(t, filepath.Join(f.main, "config.local"), "secret")
+
+	var out, errb bytes.Buffer
+	code := run(f.main, Config{Target: "feat-a", Verbose: 1}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "copied config.local -> ") {
+		t.Errorf("-v should list each copied file, got: %q", out.String())
+	}
+}
+
+func TestRun_VeryVerboseShowsResolutionDetails(t *testing.T) {
+	f := newFixture(t)
+	write(t, filepath.Join(f.main, ".worktreeinclude"), "config.local\n")
+	write(t, filepath.Join(f.main, "config.local"), "secret")
+
+	var out, errb bytes.Buffer
+	code := run(f.main, Config{Target: "feat-a", Verbose: 2}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "manifest: ") {
+		t.Errorf("-vv should show the manifest path, got: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "target: ") {
+		t.Errorf("-vv should show resolved targets, got: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "copied config.local -> ") {
+		t.Errorf("-vv should still list each copied file, got: %q", out.String())
+	}
+}
+
+func TestMain_ParsesVerbosityFlags(t *testing.T) {
+	f := newFixture(t)
+	write(t, filepath.Join(f.main, ".worktreeinclude"), "config.local\n")
+	write(t, filepath.Join(f.main, "config.local"), "secret")
+	t.Chdir(f.main)
+
+	var out, errb bytes.Buffer
+	if code := Main([]string{"-v", "feat-a"}, &out, &errb); code != 0 {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "copied config.local ->") {
+		t.Errorf("-v via Main should list files, got: %q", out.String())
+	}
+
+	out.Reset()
+	errb.Reset()
+	if code := Main([]string{"-vv", "feat-a"}, &out, &errb); code != 0 {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "manifest: ") {
+		t.Errorf("-vv via Main should show resolution details, got: %q", out.String())
+	}
+}
+
 func TestRun_MissingManifestErrors(t *testing.T) {
 	f := newFixture(t)
 	var out, errb bytes.Buffer
