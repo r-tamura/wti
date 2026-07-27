@@ -1,6 +1,7 @@
 package copyfs
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -73,6 +74,61 @@ func TestCopy_DirRecursive(t *testing.T) {
 	}
 	if got := mustRead(t, filepath.Join(dst, "sub", "b.txt")); got != "b" {
 		t.Errorf("sub/b.txt = %q", got)
+	}
+}
+
+// A tree with enough files to exercise the concurrent copy path: every file must
+// arrive with its own content and mode, and nothing may be dropped.
+func TestCopy_DirManyFilesConcurrent(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	want := map[string]string{}
+	for i := range 60 {
+		rel := filepath.Join(fmt.Sprintf("sub%d", i%7), fmt.Sprintf("f%d.txt", i))
+		content := fmt.Sprintf("content-%d", i)
+		mustWrite(t, filepath.Join(src, rel), content)
+		want[rel] = content
+	}
+	// One executable file, to confirm modes survive the parallel path.
+	mustWrite(t, filepath.Join(src, "run.sh"), "#!/bin/sh\n")
+	if err := os.Chmod(filepath.Join(src, "run.sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := filepath.Join(dir, "dst")
+	if err := Copy(src, dst); err != nil {
+		t.Fatalf("Copy: %v", err)
+	}
+
+	for rel, content := range want {
+		if got := mustRead(t, filepath.Join(dst, rel)); got != content {
+			t.Errorf("%s = %q, want %q", rel, got, content)
+		}
+	}
+	info, err := os.Stat(filepath.Join(dst, "run.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Errorf("run.sh mode = %v, want 0755", info.Mode().Perm())
+	}
+}
+
+// A failure in one of the concurrent copies must surface from Copy rather than
+// being swallowed by the worker that hit it.
+func TestCopy_DirReportsFileError(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	for _, name := range []string{"a.txt", "b.txt", "blocked.txt", "c.txt"} {
+		mustWrite(t, filepath.Join(src, name), name)
+	}
+
+	// A directory where blocked.txt's copy wants to create a file.
+	dst := filepath.Join(dir, "dst")
+	mustMkdir(t, filepath.Join(dst, "blocked.txt"))
+
+	if err := Copy(src, dst); err == nil {
+		t.Fatal("Copy = nil, want an error for the undeletable destination")
 	}
 }
 

@@ -1,12 +1,18 @@
 // Package copyfs copies files, directories, and symlinks on the local
 // filesystem, preserving file modes and recreating symlinks (rather than
 // dereferencing them). Existing destination files are always overwritten.
+//
+// Directory copies fan the individual file copies out over a bounded pool of
+// goroutines; Copy itself is safe to call concurrently as long as the callers
+// write to distinct destinations.
 package copyfs
 
 import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sync"
 )
 
 // Copy copies the filesystem object at src to dst.
@@ -76,8 +82,29 @@ func copySymlink(src, dst string) error {
 	return os.Symlink(target, dst)
 }
 
+// copyDir copies a tree in two passes: the walk creates the destination
+// directories and symlinks (cheap, and a directory must exist before the files
+// inside it), then the regular files are copied concurrently, which is where the
+// time in a large tree actually goes.
 func copyDir(src, dst string) error {
-	return filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
+	files, err := prepareTree(src, dst)
+	if err != nil {
+		return err
+	}
+	return copyFiles(files)
+}
+
+// fileCopy is one pending regular-file copy.
+type fileCopy struct {
+	src, dst string
+	perm     os.FileMode
+}
+
+// prepareTree walks src creating the directories and symlinks under dst, and
+// returns the regular files still to be copied.
+func prepareTree(src, dst string) ([]fileCopy, error) {
+	var files []fileCopy
+	err := filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -98,9 +125,68 @@ func copyDir(src, dst string) error {
 		case d.IsDir():
 			return os.MkdirAll(target, dirPerm(info.Mode().Perm()))
 		default:
-			return copyFile(path, target, info.Mode().Perm())
+			files = append(files, fileCopy{src: path, dst: target, perm: info.Mode().Perm()})
+			return nil
 		}
 	})
+	if err != nil {
+		return nil, err
+	}
+	return files, nil
+}
+
+// copyFiles copies files with at most maxConcurrentCopies in flight. It returns
+// the first error and stops starting further copies once one occurs, so a failed
+// tree copy leaves the same partial result as the sequential version did.
+func copyFiles(files []fileCopy) error {
+	// Small trees are not worth the goroutine setup.
+	if len(files) < 2 {
+		for _, f := range files {
+			if err := copyFile(f.src, f.dst, f.perm); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	sem := make(chan struct{}, maxConcurrentCopies())
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var firstErr error
+
+	for _, f := range files {
+		mu.Lock()
+		stop := firstErr != nil
+		mu.Unlock()
+		if stop {
+			break
+		}
+
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if err := copyFile(f.src, f.dst, f.perm); err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	return firstErr
+}
+
+// maxConcurrentCopies bounds the in-flight copies of a single tree. Each copy
+// holds two open file descriptors, so the cap keeps a large tree well clear of
+// the process limit — including when callers copy into several destinations at
+// once, which multiplies this by the number of destinations. Beyond a handful of
+// workers the disk, not the CPU, is the limit.
+func maxConcurrentCopies() int {
+	return min(max(runtime.NumCPU(), 1), 8)
 }
 
 // dirPerm guarantees the owner can traverse/write the copied directory.

@@ -134,6 +134,41 @@ func TestRun_CopiesToAllLinkedWorktrees(t *testing.T) {
 	}
 }
 
+// Targets are copied concurrently, so each target's lines must stay contiguous
+// in the output and appear in target order rather than interleaved.
+func TestRun_ConcurrentTargetsKeepOutputGrouped(t *testing.T) {
+	f := newFixture(t)
+	write(t, filepath.Join(f.main, ".worktreeinclude"), "one.local\ntwo.local\n")
+	write(t, filepath.Join(f.main, "one.local"), "1")
+	write(t, filepath.Join(f.main, "two.local"), "2")
+
+	var out, errb bytes.Buffer
+	code := run(f.main, Config{Verbose: 1}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, errb.String())
+	}
+
+	// Every line names its destination worktree; grouped output means the
+	// destinations form runs, not an alternating sequence.
+	var order []string
+	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+		switch {
+		case strings.Contains(line, f.featA):
+			order = append(order, "a")
+		case strings.Contains(line, f.featB):
+			order = append(order, "b")
+		default:
+			t.Fatalf("unexpected output line: %q", line)
+		}
+	}
+	if len(order) != 4 {
+		t.Fatalf("got %d copy lines, want 4: %q", len(order), out.String())
+	}
+	if order[0] != order[1] || order[2] != order[3] || order[0] == order[2] {
+		t.Errorf("output not grouped by target: %v\n%s", order, out.String())
+	}
+}
+
 func TestRun_SingleTarget(t *testing.T) {
 	f := newFixture(t)
 	write(t, filepath.Join(f.main, ".worktreeinclude"), "config.local\n")

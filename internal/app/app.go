@@ -3,6 +3,7 @@
 package app
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"runtime/debug"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/r-tamura/wti/internal/copyfs"
 	"github.com/r-tamura/wti/internal/manifest"
@@ -184,34 +186,72 @@ func run(cwd string, cfg Config, stdout, stderr io.Writer) int {
 		exitCode = 1
 	}
 
-	for _, tgt := range targets {
-		if cfg.Verbose >= 2 {
-			fmt.Fprintf(stdout, "target: %s\n", tgt.Path)
-		}
-		copied := 0
-		for _, rel := range paths {
-			src := filepath.Join(main.Path, rel)
-			dst := filepath.Join(tgt.Path, rel)
-			if cfg.DryRun {
-				fmt.Fprintf(stdout, "would copy %s -> %s\n", rel, tgt.Path)
-				continue
-			}
-			if err := copyfs.Copy(src, dst); err != nil {
-				fmt.Fprintf(stderr, "wti: copy %s -> %s: %v\n", rel, tgt.Path, err)
-				exitCode = 1
-				continue
-			}
-			copied++
-			if cfg.Verbose >= 1 {
-				fmt.Fprintf(stdout, "copied %s -> %s\n", rel, tgt.Path)
-			}
-		}
-		if !cfg.DryRun && cfg.Verbose == 0 {
-			fmt.Fprintf(stdout, "copied %d file(s) -> %s\n", copied, tgt.Path)
+	results := copyToTargets(main.Path, targets, paths, cfg)
+	for i := range results {
+		fmt.Fprint(stdout, results[i].stdout.String())
+		fmt.Fprint(stderr, results[i].stderr.String())
+		if results[i].failed {
+			exitCode = 1
 		}
 	}
 
 	return exitCode
+}
+
+// targetResult holds one target's buffered output and whether any of its copies
+// failed.
+type targetResult struct {
+	stdout bytes.Buffer
+	stderr bytes.Buffer
+	failed bool
+}
+
+// copyToTargets copies paths into every target concurrently, one goroutine per
+// target. Targets are distinct worktrees, so the copies themselves never touch
+// the same file; the only shared resource is the output, which each worker
+// buffers so lines from different targets cannot interleave. Results are
+// returned in target order, keeping the printed output deterministic.
+func copyToTargets(mainPath string, targets []worktree.Worktree, paths []string, cfg Config) []targetResult {
+	results := make([]targetResult, len(targets))
+	var wg sync.WaitGroup
+	for i, tgt := range targets {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			copyToTarget(mainPath, tgt, paths, cfg, &results[i])
+		}()
+	}
+	wg.Wait()
+	return results
+}
+
+// copyToTarget copies every path from mainPath into tgt, recording progress and
+// failures in res.
+func copyToTarget(mainPath string, tgt worktree.Worktree, paths []string, cfg Config, res *targetResult) {
+	if cfg.Verbose >= 2 {
+		fmt.Fprintf(&res.stdout, "target: %s\n", tgt.Path)
+	}
+	copied := 0
+	for _, rel := range paths {
+		src := filepath.Join(mainPath, rel)
+		dst := filepath.Join(tgt.Path, rel)
+		if cfg.DryRun {
+			fmt.Fprintf(&res.stdout, "would copy %s -> %s\n", rel, tgt.Path)
+			continue
+		}
+		if err := copyfs.Copy(src, dst); err != nil {
+			fmt.Fprintf(&res.stderr, "wti: copy %s -> %s: %v\n", rel, tgt.Path, err)
+			res.failed = true
+			continue
+		}
+		copied++
+		if cfg.Verbose >= 1 {
+			fmt.Fprintf(&res.stdout, "copied %s -> %s\n", rel, tgt.Path)
+		}
+	}
+	if !cfg.DryRun && cfg.Verbose == 0 {
+		fmt.Fprintf(&res.stdout, "copied %d file(s) -> %s\n", copied, tgt.Path)
+	}
 }
 
 func resolveTargets(cwd, target string) ([]worktree.Worktree, error) {
