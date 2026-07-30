@@ -15,7 +15,10 @@ import (
 	"sync"
 )
 
-// Copy copies the filesystem object at src to dst.
+// Copy copies the filesystem object at src to dst and returns the number of
+// files copied: regular files and symlinks count as one each, and a directory
+// counts every file inside it, not the directory itself. The count is only
+// meaningful when the returned error is nil.
 //
 //   - Regular files are copied byte-for-byte, preserving their permission bits.
 //     An existing dst is truncated and overwritten.
@@ -24,19 +27,25 @@ import (
 //     they are not dereferenced.
 //
 // Parent directories of dst are created as needed.
-func Copy(src, dst string) error {
+func Copy(src, dst string) (int, error) {
 	info, err := os.Lstat(src)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	switch {
 	case info.Mode()&os.ModeSymlink != 0:
-		return copySymlink(src, dst)
+		if err := copySymlink(src, dst); err != nil {
+			return 0, err
+		}
+		return 1, nil
 	case info.IsDir():
 		return copyDir(src, dst)
 	default:
-		return copyFile(src, dst, info.Mode().Perm())
+		if err := copyFile(src, dst, info.Mode().Perm()); err != nil {
+			return 0, err
+		}
+		return 1, nil
 	}
 }
 
@@ -86,12 +95,15 @@ func copySymlink(src, dst string) error {
 // directories and symlinks (cheap, and a directory must exist before the files
 // inside it), then the regular files are copied concurrently, which is where the
 // time in a large tree actually goes.
-func copyDir(src, dst string) error {
-	files, err := prepareTree(src, dst)
+func copyDir(src, dst string) (int, error) {
+	files, symlinks, err := prepareTree(src, dst)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	return copyFiles(files)
+	if err := copyFiles(files); err != nil {
+		return 0, err
+	}
+	return len(files) + symlinks, nil
 }
 
 // fileCopy is one pending regular-file copy.
@@ -101,9 +113,11 @@ type fileCopy struct {
 }
 
 // prepareTree walks src creating the directories and symlinks under dst, and
-// returns the regular files still to be copied.
-func prepareTree(src, dst string) ([]fileCopy, error) {
+// returns the regular files still to be copied along with the number of
+// symlinks it recreated.
+func prepareTree(src, dst string) ([]fileCopy, int, error) {
 	var files []fileCopy
+	symlinks := 0
 	err := filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -121,7 +135,11 @@ func prepareTree(src, dst string) ([]fileCopy, error) {
 
 		switch {
 		case info.Mode()&os.ModeSymlink != 0:
-			return copySymlink(path, target)
+			if err := copySymlink(path, target); err != nil {
+				return err
+			}
+			symlinks++
+			return nil
 		case d.IsDir():
 			return os.MkdirAll(target, dirPerm(info.Mode().Perm()))
 		default:
@@ -130,9 +148,9 @@ func prepareTree(src, dst string) ([]fileCopy, error) {
 		}
 	})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return files, nil
+	return files, symlinks, nil
 }
 
 // copyFiles copies files with at most maxConcurrentCopies in flight. It returns

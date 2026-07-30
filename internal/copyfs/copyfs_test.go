@@ -15,8 +15,12 @@ func TestCopy_File(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := Copy(src, dst); err != nil {
+	n, err := Copy(src, dst)
+	if err != nil {
 		t.Fatalf("Copy: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("count = %d, want 1", n)
 	}
 
 	got, err := os.ReadFile(dst)
@@ -47,7 +51,7 @@ func TestCopy_FileOverwrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := Copy(src, dst); err != nil {
+	if _, err := Copy(src, dst); err != nil {
 		t.Fatalf("Copy: %v", err)
 	}
 
@@ -65,8 +69,12 @@ func TestCopy_DirRecursive(t *testing.T) {
 	mustWrite(t, filepath.Join(src, "sub", "b.txt"), "b")
 
 	dst := filepath.Join(dir, "dst")
-	if err := Copy(src, dst); err != nil {
+	n, err := Copy(src, dst)
+	if err != nil {
 		t.Fatalf("Copy: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("count = %d, want 2 (files inside the tree, not the directory)", n)
 	}
 
 	if got := mustRead(t, filepath.Join(dst, "a.txt")); got != "a" {
@@ -96,8 +104,12 @@ func TestCopy_DirManyFilesConcurrent(t *testing.T) {
 	}
 
 	dst := filepath.Join(dir, "dst")
-	if err := Copy(src, dst); err != nil {
+	n, err := Copy(src, dst)
+	if err != nil {
 		t.Fatalf("Copy: %v", err)
+	}
+	if want := len(want) + 1; n != want {
+		t.Errorf("count = %d, want %d", n, want)
 	}
 
 	for rel, content := range want {
@@ -127,7 +139,7 @@ func TestCopy_DirReportsFileError(t *testing.T) {
 	dst := filepath.Join(dir, "dst")
 	mustMkdir(t, filepath.Join(dst, "blocked.txt"))
 
-	if err := Copy(src, dst); err == nil {
+	if _, err := Copy(src, dst); err == nil {
 		t.Fatal("Copy = nil, want an error for the undeletable destination")
 	}
 }
@@ -140,8 +152,12 @@ func TestCopy_SymlinkRecreated(t *testing.T) {
 	}
 	dst := filepath.Join(dir, "out", "link")
 
-	if err := Copy(src, dst); err != nil {
+	n, err := Copy(src, dst)
+	if err != nil {
 		t.Fatalf("Copy: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("count = %d, want 1", n)
 	}
 
 	target, err := os.Readlink(dst)

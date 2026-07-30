@@ -240,6 +240,23 @@ func TestRun_DefaultOutputIsSummaryOnly(t *testing.T) {
 	}
 }
 
+func TestRun_SummaryCountsFilesInsideDirectories(t *testing.T) {
+	f := newFixture(t)
+	write(t, filepath.Join(f.main, ".worktreeinclude"), ".claude\nconfig.local\n")
+	write(t, filepath.Join(f.main, ".claude", "settings.json"), "{}")
+	write(t, filepath.Join(f.main, ".claude", "agents", "a.md"), "a")
+	write(t, filepath.Join(f.main, "config.local"), "secret")
+
+	var out, errb bytes.Buffer
+	code := run(f.main, Config{Target: "feat-a"}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "copied 3 file(s)") {
+		t.Errorf("summary should count files inside directories, got: %q", out.String())
+	}
+}
+
 func TestRun_VerboseListsEachFile(t *testing.T) {
 	f := newFixture(t)
 	write(t, filepath.Join(f.main, ".worktreeinclude"), "config.local\n")

@@ -239,12 +239,13 @@ func copyToTarget(mainPath string, tgt worktree.Worktree, paths []string, cfg Co
 			fmt.Fprintf(&res.stdout, "would copy %s -> %s\n", rel, tgt.Path)
 			continue
 		}
-		if err := copyfs.Copy(src, dst); err != nil {
+		n, err := copyfs.Copy(src, dst)
+		if err != nil {
 			fmt.Fprintf(&res.stderr, "wti: copy %s -> %s: %v\n", rel, tgt.Path, err)
 			res.failed = true
 			continue
 		}
-		copied++
+		copied += n
 		if cfg.Verbose >= 1 {
 			fmt.Fprintf(&res.stdout, "copied %s -> %s\n", rel, tgt.Path)
 		}
