@@ -113,7 +113,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	var cfg Config
 	var showVersion, verbose, veryVerbose bool
 	fs.BoolVar(&cfg.DryRun, "dry-run", false, "show planned actions without writing anything")
-	fs.BoolVar(&cfg.Debug, "debug", false, "print full error details on failure")
+	fs.BoolVar(&cfg.Debug, "debug", false, "print full error details and warnings")
 	fs.BoolVar(&verbose, "v", false, "list each copied file")
 	fs.BoolVar(&veryVerbose, "vv", false, "also show manifest and target resolution details")
 	fs.BoolVar(&showVersion, "version", false, "print version information and exit")
@@ -182,7 +182,9 @@ func run(cwd string, cfg Config, stdout, stderr io.Writer) int {
 
 	exitCode := 0
 	for _, name := range missing {
-		fmt.Fprintf(stderr, "wti: warning: source not found, skipping: %s\n", name)
+		if cfg.Debug {
+			fmt.Fprintf(stderr, "wti: warning: source not found, skipping: %s\n", name)
+		}
 		exitCode = 1
 	}
 

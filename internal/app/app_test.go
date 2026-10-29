@@ -336,8 +336,14 @@ func TestRun_MissingLiteralWarnsAndExitsNonZero(t *testing.T) {
 	if code == 0 {
 		t.Error("missing literal source should cause non-zero exit")
 	}
+	if strings.Contains(errb.String(), "typo-missing.txt") {
+		t.Errorf("warning should be hidden without --debug, got: %q", errb.String())
+	}
+
+	errb.Reset()
+	run(f.main, Config{Debug: true}, &out, &errb)
 	if !strings.Contains(errb.String(), "typo-missing.txt") {
-		t.Errorf("stderr should warn about the missing file, got: %q", errb.String())
+		t.Errorf("--debug should warn about the missing file, got: %q", errb.String())
 	}
 	// The present file must still be copied despite the missing one.
 	if !exists(filepath.Join(f.featA, "present.txt")) {
