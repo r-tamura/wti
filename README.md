@@ -25,6 +25,9 @@ wti my-feature
 # Preview without writing anything
 wti --dry-run
 
+# Keep destination files that were deleted from the source directory
+wti --no-delete
+
 # List each copied file (default output is a per-worktree summary)
 wti -v
 
@@ -34,6 +37,18 @@ wti -vv
 
 `wti` always reads `.worktreeinclude` from the **main worktree**, regardless of
 the directory you run it from.
+
+## Deleted files
+
+Like `rsync --delete`, a copied **directory** is mirrored: files and
+subdirectories that exist in the worktree but no longer exist in the main
+worktree's directory are removed. Pass `--no-delete` to keep them, and
+`--dry-run` to see what would be removed (`would delete ...`).
+
+Only directories listed literally in the manifest (e.g. `docs/notes/`) are
+mirrored. Individual files — including anything matched by a wildcard or `!`
+pattern — are only overwritten; a file deleted from the main worktree is not
+removed from the others.
 
 ## `.worktreeinclude`
 

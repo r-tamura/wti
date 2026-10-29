@@ -194,3 +194,101 @@ func mustRead(t *testing.T, p string) string {
 	}
 	return string(b)
 }
+
+func TestPrune_RemovesEntriesMissingFromSource(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+	for p, c := range map[string]string{
+		"src/keep.txt":        "k",
+		"src/sub/keep.txt":    "k",
+		"dst/keep.txt":        "k",
+		"dst/gone.txt":        "g",
+		"dst/sub/keep.txt":    "k",
+		"dst/sub/gone.txt":    "g",
+		"dst/olddir/deep.txt": "d",
+	} {
+		full := filepath.Join(dir, p)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(c), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	removed, err := Prune(src, dst, false)
+	if err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+	want := []string{"gone.txt", "olddir", "sub/gone.txt"}
+	if fmt.Sprint(removed) != fmt.Sprint(want) {
+		t.Errorf("removed = %v, want %v", removed, want)
+	}
+	for _, p := range []string{"keep.txt", "sub/keep.txt"} {
+		if _, err := os.Lstat(filepath.Join(dst, p)); err != nil {
+			t.Errorf("%s should be kept: %v", p, err)
+		}
+	}
+	for _, p := range []string{"gone.txt", "olddir", "sub/gone.txt"} {
+		if _, err := os.Lstat(filepath.Join(dst, p)); !os.IsNotExist(err) {
+			t.Errorf("%s should be removed, err = %v", p, err)
+		}
+	}
+}
+
+func TestPrune_DryRunRemovesNothing(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+	os.MkdirAll(src, 0o755)
+	os.MkdirAll(dst, 0o755)
+	os.WriteFile(filepath.Join(dst, "extra.txt"), []byte("x"), 0o644)
+
+	removed, err := Prune(src, dst, true)
+	if err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+	if len(removed) != 1 || removed[0] != "extra.txt" {
+		t.Errorf("removed = %v, want [extra.txt]", removed)
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "extra.txt")); err != nil {
+		t.Errorf("dry run must not remove: %v", err)
+	}
+}
+
+func TestPrune_DoesNotFollowSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+	outside := filepath.Join(dir, "outside")
+	for _, d := range []string{src, dst, outside} {
+		os.MkdirAll(d, 0o755)
+	}
+	os.WriteFile(filepath.Join(outside, "precious.txt"), []byte("p"), 0o644)
+	if err := os.Symlink(outside, filepath.Join(dst, "link")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Prune(src, dst, false); err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "link")); !os.IsNotExist(err) {
+		t.Errorf("symlink itself should be removed, err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "precious.txt")); err != nil {
+		t.Errorf("symlink target must be untouched: %v", err)
+	}
+}
+
+func TestPrune_NoopForFileSourceOrMissingDst(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "f")
+	os.WriteFile(file, []byte("x"), 0o644)
+	if removed, err := Prune(file, filepath.Join(dir, "nope"), false); err != nil || len(removed) != 0 {
+		t.Errorf("file src: removed=%v err=%v", removed, err)
+	}
+	if removed, err := Prune(dir, filepath.Join(dir, "nope"), false); err != nil || len(removed) != 0 {
+		t.Errorf("missing dst: removed=%v err=%v", removed, err)
+	}
+}

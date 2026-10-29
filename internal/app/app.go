@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime/debug"
 	"sort"
@@ -84,10 +85,11 @@ func resolveVersion(ldVersion, ldCommit, ldDate string, bi *debug.BuildInfo, ok 
 
 // Config holds the resolved command-line options.
 type Config struct {
-	DryRun  bool
-	Debug   bool
-	Verbose int    // 0 = summary only, 1 (-v) = per-file, 2 (-vv) = resolution details
-	Target  string // positional worktree selector; empty = all linked worktrees
+	DryRun   bool
+	NoDelete bool // keep destination files that no longer exist in the source directory
+	Debug    bool
+	Verbose  int    // 0 = summary only, 1 (-v) = per-file, 2 (-vv) = resolution details
+	Target   string // positional worktree selector; empty = all linked worktrees
 }
 
 const usage = `wti — copy files listed in .worktreeinclude into git worktrees
@@ -113,6 +115,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	var cfg Config
 	var showVersion, verbose, veryVerbose bool
 	fs.BoolVar(&cfg.DryRun, "dry-run", false, "show planned actions without writing anything")
+	fs.BoolVar(&cfg.NoDelete, "no-delete", false, "keep destination files that no longer exist in a copied source directory")
 	fs.BoolVar(&cfg.Debug, "debug", false, "print full error details and warnings")
 	fs.BoolVar(&verbose, "v", false, "list each copied file")
 	fs.BoolVar(&veryVerbose, "vv", false, "also show manifest and target resolution details")
@@ -233,27 +236,46 @@ func copyToTarget(mainPath string, tgt worktree.Worktree, paths []string, cfg Co
 	if cfg.Verbose >= 2 {
 		fmt.Fprintf(&res.stdout, "target: %s\n", tgt.Path)
 	}
-	copied := 0
+	copied, deleted := 0, 0
 	for _, rel := range paths {
 		src := filepath.Join(mainPath, rel)
 		dst := filepath.Join(tgt.Path, rel)
 		if cfg.DryRun {
 			fmt.Fprintf(&res.stdout, "would copy %s -> %s\n", rel, tgt.Path)
+		} else {
+			n, err := copyfs.Copy(src, dst)
+			if err != nil {
+				fmt.Fprintf(&res.stderr, "wti: copy %s -> %s: %v\n", rel, tgt.Path, err)
+				res.failed = true
+				continue
+			}
+			copied += n
+			if cfg.Verbose >= 1 {
+				fmt.Fprintf(&res.stdout, "copied %s -> %s\n", rel, tgt.Path)
+			}
+		}
+		if cfg.NoDelete {
 			continue
 		}
-		n, err := copyfs.Copy(src, dst)
+		removed, err := copyfs.Prune(src, dst, cfg.DryRun)
 		if err != nil {
-			fmt.Fprintf(&res.stderr, "wti: copy %s -> %s: %v\n", rel, tgt.Path, err)
+			fmt.Fprintf(&res.stderr, "wti: delete in %s -> %s: %v\n", rel, tgt.Path, err)
 			res.failed = true
-			continue
 		}
-		copied += n
-		if cfg.Verbose >= 1 {
-			fmt.Fprintf(&res.stdout, "copied %s -> %s\n", rel, tgt.Path)
+		deleted += len(removed)
+		for _, r := range removed {
+			if cfg.DryRun {
+				fmt.Fprintf(&res.stdout, "would delete %s -> %s\n", path.Join(rel, r), tgt.Path)
+			} else if cfg.Verbose >= 1 {
+				fmt.Fprintf(&res.stdout, "deleted %s -> %s\n", path.Join(rel, r), tgt.Path)
+			}
 		}
 	}
 	if !cfg.DryRun && cfg.Verbose == 0 {
 		fmt.Fprintf(&res.stdout, "copied %d file(s) -> %s\n", copied, tgt.Path)
+		if deleted > 0 {
+			fmt.Fprintf(&res.stdout, "deleted %d path(s) -> %s\n", deleted, tgt.Path)
+		}
 	}
 }
 

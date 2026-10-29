@@ -211,3 +211,53 @@ func maxConcurrentCopies() int {
 func dirPerm(p os.FileMode) os.FileMode {
 	return p | 0o700
 }
+
+// Prune removes everything under the directory dst that has no counterpart in
+// the directory src, so that after a Copy dst mirrors src (like rsync --delete).
+// It returns the paths removed, relative to dst and slash-separated; a removed
+// directory is reported once, not once per entry inside it. With dryRun nothing
+// is removed and the result lists what would be.
+//
+// Prune does nothing unless both src and dst are directories. Symlinks are never
+// followed: an extraneous symlink is removed itself, not its target.
+func Prune(src, dst string, dryRun bool) ([]string, error) {
+	if info, err := os.Lstat(src); err != nil || !info.IsDir() {
+		return nil, err
+	}
+	if info, err := os.Lstat(dst); err != nil || !info.IsDir() {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var removed []string
+	err := filepath.WalkDir(dst, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(dst, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		if _, err := os.Lstat(filepath.Join(src, rel)); err == nil {
+			return nil
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		if !dryRun {
+			if err := os.RemoveAll(path); err != nil {
+				return err
+			}
+		}
+		removed = append(removed, filepath.ToSlash(rel))
+		if d.IsDir() {
+			return filepath.SkipDir
+		}
+		return nil
+	})
+	return removed, err
+}

@@ -412,3 +412,73 @@ func TestRun_WalkSkipsNestedWorktree(t *testing.T) {
 		t.Error("nested worktree contents must be skipped during walk")
 	}
 }
+
+func TestRun_DeletesFilesRemovedFromSourceDirectory(t *testing.T) {
+	f := newFixture(t)
+	write(t, filepath.Join(f.main, ".worktreeinclude"), ".claude\n")
+	write(t, filepath.Join(f.main, ".claude", "keep.md"), "k")
+	write(t, filepath.Join(f.featA, ".claude", "keep.md"), "old")
+	write(t, filepath.Join(f.featA, ".claude", "gone.md"), "g")
+
+	var out, errb bytes.Buffer
+	if code := run(f.main, Config{Target: "feat-a"}, &out, &errb); code != 0 {
+		t.Fatalf("exit = %d\nstderr: %s", code, errb.String())
+	}
+	if exists(filepath.Join(f.featA, ".claude", "gone.md")) {
+		t.Error("gone.md should be deleted from the destination")
+	}
+	if got := read(t, filepath.Join(f.featA, ".claude", "keep.md")); got != "k" {
+		t.Errorf("keep.md = %q", got)
+	}
+	if !strings.Contains(out.String(), "deleted 1 path(s)") {
+		t.Errorf("summary should report deletions, got: %q", out.String())
+	}
+}
+
+func TestRun_NoDeleteKeepsExtraneousFiles(t *testing.T) {
+	f := newFixture(t)
+	write(t, filepath.Join(f.main, ".worktreeinclude"), ".claude\n")
+	write(t, filepath.Join(f.main, ".claude", "keep.md"), "k")
+	write(t, filepath.Join(f.featA, ".claude", "gone.md"), "g")
+
+	var out, errb bytes.Buffer
+	if code := run(f.main, Config{Target: "feat-a", NoDelete: true}, &out, &errb); code != 0 {
+		t.Fatalf("exit = %d\nstderr: %s", code, errb.String())
+	}
+	if !exists(filepath.Join(f.featA, ".claude", "gone.md")) {
+		t.Error("--no-delete must keep gone.md")
+	}
+}
+
+func TestRun_DryRunReportsDeletionsWithoutDeleting(t *testing.T) {
+	f := newFixture(t)
+	write(t, filepath.Join(f.main, ".worktreeinclude"), ".claude\n")
+	write(t, filepath.Join(f.main, ".claude", "keep.md"), "k")
+	write(t, filepath.Join(f.featA, ".claude", "gone.md"), "g")
+
+	var out, errb bytes.Buffer
+	if code := run(f.main, Config{Target: "feat-a", DryRun: true}, &out, &errb); code != 0 {
+		t.Fatalf("exit = %d\nstderr: %s", code, errb.String())
+	}
+	if !exists(filepath.Join(f.featA, ".claude", "gone.md")) {
+		t.Error("dry run must not delete")
+	}
+	if !strings.Contains(out.String(), "would delete .claude/gone.md") {
+		t.Errorf("dry run should list deletions, got: %q", out.String())
+	}
+}
+
+func TestRun_WildcardMatchedFilesAreNotDeleted(t *testing.T) {
+	f := newFixture(t)
+	write(t, filepath.Join(f.main, ".worktreeinclude"), "*.local\n")
+	write(t, filepath.Join(f.main, "a.local"), "a")
+	write(t, filepath.Join(f.featA, "b.local"), "b")
+
+	var out, errb bytes.Buffer
+	if code := run(f.main, Config{Target: "feat-a"}, &out, &errb); code != 0 {
+		t.Fatalf("exit = %d\nstderr: %s", code, errb.String())
+	}
+	if !exists(filepath.Join(f.featA, "b.local")) {
+		t.Error("files not under a mirrored directory must not be deleted")
+	}
+}
