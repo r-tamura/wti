@@ -326,15 +326,14 @@ func TestRun_MissingManifestErrors(t *testing.T) {
 	}
 }
 
-func TestRun_MissingLiteralWarnsAndExitsNonZero(t *testing.T) {
+func TestRun_MissingLiteralIsSkippedSilentlyWithExitZero(t *testing.T) {
 	f := newFixture(t)
 	write(t, filepath.Join(f.main, ".worktreeinclude"), "present.txt\ntypo-missing.txt\n")
 	write(t, filepath.Join(f.main, "present.txt"), "ok")
 
 	var out, errb bytes.Buffer
-	code := run(f.main, Config{}, &out, &errb)
-	if code == 0 {
-		t.Error("missing literal source should cause non-zero exit")
+	if code := run(f.main, Config{}, &out, &errb); code != 0 {
+		t.Errorf("missing literal source should not cause non-zero exit, got %d", code)
 	}
 	if strings.Contains(errb.String(), "typo-missing.txt") {
 		t.Errorf("warning should be hidden without --debug, got: %q", errb.String())
