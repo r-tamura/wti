@@ -183,13 +183,15 @@ func run(cwd string, cfg Config, stdout, stderr io.Writer) int {
 		return fail(stderr, cfg, err)
 	}
 
-	exitCode := 0
+	// A literal line whose source does not exist is simply skipped; it is not
+	// an error. The warning is only shown with --debug.
 	for _, name := range missing {
 		if cfg.Debug {
 			fmt.Fprintf(stderr, "wti: warning: source not found, skipping: %s\n", name)
 		}
-		exitCode = 1
 	}
+
+	exitCode := 0
 
 	results := copyToTargets(main.Path, targets, paths, cfg)
 	for i := range results {
